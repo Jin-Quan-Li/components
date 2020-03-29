@@ -2,7 +2,7 @@
     <div class="wrapper">
         <!-- 头部名称 日期 礼拜几 -->
         <div class="calendar-wrapper">
-            <div class="calendar-wrapper-title">日历</div>
+            <div class="calendar-wrapper-title" v-show="showTitle">{{title}}</div>
             <div class="calendar-wrapper-date">{{dateTable[scrollTop].desc.split("-")[0] + "年" + dateTable[scrollTop].desc.split("-")[1] + "月"  }}</div>
             <div class="calendar-wrapper-weeks">
                 <span v-for="(item,index) in weeks" :key="index">{{item}}</span>
@@ -14,30 +14,112 @@
                 <h6 v-show="index > 0">{{item.desc.split("-")[0] + "年" + item.desc.split("-")[1] + "月"  }}</h6>
                 <div class="calendar-content">
                     <div class="calendar-data-check" v-for="(itemName,i) in item.list" :key="i">
-                        <div @click="handleItemClick(item.desc,cal.number,index,i,ind,cal)" v-for="(cal,ind) in itemName" :class="[{range:isCheck.indexOf(cal.date) > 0 && isCheck.indexOf(cal.date) < isCheck.length - 1},{overdue:cal.disable,active:cal.isActive}]" :key="ind">{{cal.number || ''}}</div>
+                        <div @click="handleItemClick(item.desc,cal.number,index,i,ind,cal)" v-for="(cal,ind) in itemName" :class="[{range:isCheck.indexOf(cal.date) > 0 && isCheck.indexOf(cal.date) < isCheck.length - 1},{overdue:cal.disable,active:cal.isActive}]" :style="{ background: cal.isActive ? color : '' }" :key="ind">
+                            <div>
+                                <div>
+                                    <!-- 公日节假日 -->
+                                    <span v-if="cal.holiday && showHoliday" :class="['calendar-data-holiday', {solar:!cal.isActive && !cal.disable}]">{{cal.holiday}}</span>
+                                    <!-- 农历节假日 -->
+                                    <span v-else-if="cal.solar && showHoliday" :class="['calendar-data-holiday', {lunar:!cal.isActive && !cal.disable}]">{{cal.solar}}</span>
+                                    <!-- 普通日 -->
+                                    <span v-else>{{cal.number || ''}}</span>
+                                </div>
+                                <!-- 显示开始结束 -->
+                                <div v-show="cal.number && type === 'range' && isCheck.length && showRangeText" class="range-text">
+                                    {{cal.date === isCheck[0] ? rangeText.start : cal.date === isCheck[isCheck.length - 1] ? rangeText.end : '' }}
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                    <div class="mark">{{item.desc.split("-")[1] > 9 ? item.desc.split("-")[1] : Number(item.desc.split("-")[1])}}</div>
+                    <div class="mark" v-show="showMark">{{item.desc.split("-")[1] > 9 ? item.desc.split("-")[1] : Number(item.desc.split("-")[1])}}</div>
                 </div>
             </div>
         </div>
         <div>
-            <button>确定</button>
+            <button :style="{ background: color }" v-if="type === 'range' &&  isCheck.length < 2 " class="disabled">{{confirmText}}</button>
+            <button :style="{ background: color }" v-else @click="handleConfirm">{{confirmDisabledText || confirmText}}</button>
         </div>
     </div>
 </template>
 
 <script>
 import { cloneDeep, chunk } from "lodash";
+import parseTime from './parseTime';
+import initDate from './initDate';
+import Lunar from './lunar.js'
+/**
+ * @param {String} type  日历类型
+ * @param {[String,Date]} minDate  最小日期
+ * @param {[String,Date]} maxDate  最大日期
+ * @param {String} confirmText  确定按钮文字
+ * @param {Boolean} showMark  是否显示水印
+ * @param {Boolean} showTitle  是否显示标题
+ * @param {String} title  标题名称
+ * @param {String} confirmDisabledText  禁止按钮文本
+ * @param {Boolean} showRangeText  是否显示选中日期下的标签
+ * @param {String} rangeText  选中日期的第一条 最后一天的标签文本 只有type === range 有效
+ * @param {Boolean} showHoliday  是否显示节假日(公历,农历)
+ * @param {String} color  主题色，对底部按钮和选中日期生效
+ */
 export default {
-    name:'HotelCalendar',
+    name:'LiCalendar',
     props:{
         type:{
             type:String,
             default:'single'
         },
         minDate:{
+            type:[String,Date],
+            default: () => {
+                return new Date()
+            }
+        },
+        maxDate:{
+            type:[String,Date],
+            default:() => {
+                return new Date()
+            }
+        },
+        confirmText:{
             type:String,
-            default: new Date() + ''
+            default:'确定'
+        },
+        showMark:{
+            type:Boolean,
+            default:true
+        },
+        showTitle:{
+            type:Boolean,
+            default:true
+        },
+        title:{
+            type:String,
+            default:"日历"
+        },
+        confirmDisabledText:{
+            type:String,
+            default:""
+        },
+        showRangeText:{
+            type:Boolean,
+            default:true
+        },
+        rangeText:{
+            type:Object,
+            default:() => {
+                return {
+                    start:"开始",
+                    end:"结束"
+                }
+            }
+        },
+        showHoliday:{
+            type:Boolean,
+            default:false
+        },
+        color:{
+            type:String,
+            default:"#ee0a24"
         }
     },
     data () {
@@ -54,24 +136,25 @@ export default {
     created(){
         /** 初始化所有日期数据 包括默认选中数据 */
         let temp = []
-		for (let i = 0; i < 3; i++) {  // 取近三个月内的日期
+		for (let i = 0; i < this.MonthsBetw(this.minDate,this.maxDate); i++) {  // 取近三个月内的日期
 			let obj = this.getDateTable(i);
 			temp.push(obj);
 		}
-        temp.forEach((item, index) => {
-            item.list.forEach((itemName, i) => {
-                itemName.forEach((v, inx) => {
-                    /** 如果type === range 连选 默认明天日期也选中 */
-                    if( this.type === 'range' ) {
-                        v.isActive = +new Date(v.date) === +new Date(this._getDateYearMonth().current) || +new Date(v.date) === +new Date(this._getDateYearMonth().nextMonth) ? true : false
-                    }else {
-                        /** 默认当前日期选中 */
-                        v.isActive = +new Date(v.date) === +new Date(this._getDateYearMonth().current) ? true : false;
-                    }
-                });
-            });
-        });
-		this.dateTable = temp;
+        this.dateTable = initDate(temp,this.type);
+        switch (this.type) {
+                /** 多选 */
+                case 'single':
+                    this.isCheck = [this._getDateYearMonth().current]
+                break
+                /** 单选 */
+                case 'multiple':
+                    this.isCheck = [this._getDateYearMonth().current]
+                break
+                /** 连选 */
+                case 'range':
+                    this.isCheck = [this._getDateYearMonth().current,this._getDateYearMonth().nextMonth]
+                break
+            }
     },
 
     components: {
@@ -79,7 +162,7 @@ export default {
     },
 
     computed: {
- 
+        
     },
 
     beforeMount() {
@@ -87,7 +170,7 @@ export default {
     },
 
     mounted() {
- 
+        
     },
 
     methods: {
@@ -173,7 +256,9 @@ export default {
             const str = `${year}-${month}`
             return {
                 "list": hlist,
-                "desc": str
+                "desc": str,
+                year,
+                month
             }
         },
         /** 选择日期函数 */
@@ -192,12 +277,14 @@ export default {
                     this.handleRange(desc, number, index, index1, index2,cal)
                 break
             }
+
         },
         /** 多选 */
         handleMultiple(desc, number, index, index1, index2,cal){
             if( cal.disable || cal.number == 0 ) {
                 return
             }
+            this.$emit('select',cal.date)
             let temp = cloneDeep(this.dateTable)
             const flag = !temp[index].list[index1][index2].isActive
             temp[index].list[index1][index2].isActive = flag
@@ -223,6 +310,7 @@ export default {
             if( cal.disable || cal.number == 0 ) {
                 return
             }
+            this.$emit('select',cal.date)
             let temp = this._handleDateTable()
             temp[index].list[index1][index2].isActive = true
             this.dateTable = temp
@@ -237,6 +325,7 @@ export default {
             if( cal.disable || cal.number == 0 ) {
                 return
             }
+            this.$emit('select',cal.date)
             if (number < 10) {
                 number = `0${number}`
             }
@@ -265,6 +354,8 @@ export default {
             this.isCheck = [];
             if( this.startDate && this.endDate && +new Date(this.startDate) < +new Date(this.endDate)) {
                 this.isCheck = this.getBetweenDateStr(this.startDate,this.endDate);
+            }else {
+                this.isCheck = [this.startDate]
             }
         },
         /** 初始化dateTable所有isActive false */
@@ -325,8 +416,8 @@ export default {
         /** 返回两个日期相差的月数 */
         MonthsBetw(date1, date2) { //date1和date2是2019-3-12格式
             //用-分成数组
-            date1 = date1.split("-");
-            date2 = date2.split("-");
+            date1 = parseTime(date1,'{y}-{m}-{d}').split("-");
+            date2 = parseTime(date2,'{y}-{m}-{d}').split("-");
             //获取年,月数
             var year1 = parseInt(date1[0]),
                 month1 = parseInt(date1[1]),
@@ -335,6 +426,10 @@ export default {
                 //通过年,月差计算月份差
                 months = (year2 - year1) * 12 + (month2 - month1) + 1;
             return months;
+        },
+        /** 确定按钮 */
+        handleConfirm(){
+            this.$emit('confirm',this.isCheck)
         }
     },
 
@@ -348,8 +443,12 @@ export default {
 <style lang='css' scoped>
 /* 头部 */
 .wrapper {
-    background: #fff;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
     height: 100vh;
+    background: #fff;
 }
 .calendar-wrapper {
     box-shadow: 0 2px 10px rgba(125, 126, 128, 0.16);
@@ -374,6 +473,7 @@ export default {
 
 .calendar-data-wrapper {
     overflow: auto;
+    -webkit-overflow-scrolling:touch;
     height:calc(100% - 162px);
 }
 .calendar-data-wrapper h6 {
@@ -390,13 +490,26 @@ export default {
     flex-wrap: wrap;
     justify-content: space-between;
 }
-.calendar-data-check div {
+.calendar-data-check > div {
+    display: flex;
+    align-items: center;
+    justify-content: center;
     flex:10 0;
     height: 60px;
-    line-height: 60px;
     text-align: center;
     font-size: 16px;
     cursor: pointer;
+}
+.range-text {
+    font-size: 10px;
+    line-height: 20px;
+}
+.calendar-data-holiday {
+    position: relative;
+    top: -2px;
+    font-size: 10px;
+    font-weight: 400;
+    line-height: 1;
 }
 /* 过期的日期 */
 .calendar-data-check .overdue {
@@ -449,6 +562,15 @@ button {
     outline: none;
     color: #fff;
     background-color: #ee0a24;
-    border: 1px solid #ee0a24;
+    border: 0;
+}
+.disabled {
+    opacity: 0.5;
+}
+.solar {
+    color:#4078f2
+}
+.lunar {
+    color: #ee0a24;
 }
 </style>
